@@ -32,17 +32,6 @@ public sealed partial class PostgresKeyValueStore
     public Task<JsonSetResult> JsonSetAsync(string key, string path, byte[] value, CancellationToken token = default) => throw CreateNotSupported();
     public Task<JsonArrayResult> JsonStrlenAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
     public Task<JsonTypeResult> JsonTypeAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetCountResult> SortedSetAddAsync(string key, SortedSetEntry[] entries, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetCountResult> SortedSetCardinalityAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetCountResult> SortedSetCountByScoreAsync(string key, double minScore, double maxScore, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetScoreResult> SortedSetIncrementAsync(string key, double increment, byte[] member, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetRangeResult> SortedSetRangeAsync(string key, int start, int stop, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetRangeResult> SortedSetRangeByScoreAsync(string key, double minScore, double maxScore, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetRankResult> SortedSetRankAsync(string key, byte[] member, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetCountResult> SortedSetRemoveAsync(string key, byte[][] members, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetRemoveRangeResult> SortedSetRemoveRangeByScoreAsync(string key, double minScore, double maxScore, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetRankResult> SortedSetReverseRankAsync(string key, byte[] member, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SortedSetScoreResult> SortedSetScoreAsync(string key, byte[] member, CancellationToken token = default) => throw CreateNotSupported();
     public Task<StreamAckResult> StreamAckAsync(string key, string group, string[] ids, CancellationToken token = default) => throw CreateNotSupported();
     public Task<string?> StreamAddAsync(string key, string id, KeyValuePair<string, byte[]>[] fields, CancellationToken token = default) => throw CreateNotSupported();
     public Task<StreamClaimResult> StreamClaimAsync(string key, string group, string consumer, long minIdleTimeMs, string[] ids, long? idleMs = default, long? timeMs = default, long? retryCount = default, bool force = default, CancellationToken token = default) => throw CreateNotSupported();

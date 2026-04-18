@@ -22,7 +22,7 @@ public sealed class PostgresKeyValueStoreTests
         var dataSource = Npgsql.NpgsqlDataSource.Create("Host=localhost;Username=postgres;Password=postgres;Database=postgres");
         await using var store = new PostgresKeyValueStore(dataSource, "dredis_test_store");
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.SortedSetCardinalityAsync("scores"));
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.StreamLengthAsync("events"));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.JsonGetAsync("doc", ["$"]));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.VectorGetAsync("embedding"));
     }
@@ -130,5 +130,63 @@ public sealed class PostgresKeyValueStoreTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => store.HashGetAsync("plain", "field"));
         Assert.Equal(ListResultStatus.WrongType, (await store.ListLengthAsync("plain")).Status);
         Assert.Equal(SetResultStatus.WrongType, (await store.SetCardinalityAsync("plain")).Status);
+    }
+
+    [Fact]
+    public async Task Sorted_set_operations_work_against_postgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        var tableName = $"dredis_sorted_{Guid.NewGuid():N}";
+        await using var store = new PostgresKeyValueStore(connectionString, tableName);
+
+        var add = await store.SortedSetAddAsync(
+        "scores",
+        [
+            new SortedSetEntry("alice"u8.ToArray(), 10),
+            new SortedSetEntry("bob"u8.ToArray(), 20),
+            new SortedSetEntry("carol"u8.ToArray(), 15)
+        ]);
+
+        Assert.Equal(SortedSetResultStatus.Ok, add.Status);
+        Assert.Equal(3, add.Count);
+
+        var update = await store.SortedSetAddAsync(
+            "scores",
+            [new SortedSetEntry("alice"u8.ToArray(), 12)]);
+        Assert.Equal(0, update.Count);
+
+        var range = await store.SortedSetRangeAsync("scores", 0, -1);
+        Assert.Equal(SortedSetResultStatus.Ok, range.Status);
+        Assert.Equal(["alice"u8.ToArray(), "carol"u8.ToArray(), "bob"u8.ToArray()], range.Entries.Select(static x => x.Member).ToArray());
+
+        var byScore = await store.SortedSetRangeByScoreAsync("scores", 12, 20);
+        Assert.Equal(3, byScore.Entries.Length);
+        Assert.Equal(3, (await store.SortedSetCardinalityAsync("scores")).Count);
+        Assert.Equal(2, (await store.SortedSetCountByScoreAsync("scores", 13, 20)).Count);
+
+        var score = await store.SortedSetScoreAsync("scores", "alice"u8.ToArray());
+        Assert.Equal(12, score.Score);
+
+        var incremented = await store.SortedSetIncrementAsync("scores", 10, "alice"u8.ToArray());
+        Assert.Equal(22, incremented.Score);
+        Assert.Equal(2, (await store.SortedSetRankAsync("scores", "alice"u8.ToArray())).Rank);
+        Assert.Equal(0, (await store.SortedSetReverseRankAsync("scores", "alice"u8.ToArray())).Rank);
+
+        var removedRange = await store.SortedSetRemoveRangeByScoreAsync("scores", 21, 30);
+        Assert.Equal(SortedSetResultStatus.Ok, removedRange.Status);
+        Assert.Equal(1, removedRange.Removed);
+
+        var removedMember = await store.SortedSetRemoveAsync("scores", ["bob"u8.ToArray()]);
+        Assert.Equal(1, removedMember.Count);
+        Assert.Equal(1, (await store.SortedSetCardinalityAsync("scores")).Count);
+
+        await store.SetAsync("plain-zset", "value"u8.ToArray(), expiration: null, SetCondition.None);
+        Assert.Equal(SortedSetResultStatus.WrongType, (await store.SortedSetCardinalityAsync("plain-zset")).Status);
+        Assert.Equal(SortedSetResultStatus.WrongType, (await store.SortedSetScoreAsync("plain-zset", "x"u8.ToArray())).Status);
     }
 }

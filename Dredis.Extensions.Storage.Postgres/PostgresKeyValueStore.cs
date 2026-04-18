@@ -13,6 +13,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private const string HashKind = "hash";
     private const string ListKind = "list";
     private const string SetKind = "set";
+    private const string SortedSetKind = "sorted-set";
     private static readonly Regex IdentifierPartPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly NpgsqlDataSource _dataSource;
@@ -22,6 +23,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private readonly string _qualifiedHashTableName;
     private readonly string _qualifiedListTableName;
     private readonly string _qualifiedSetTableName;
+    private readonly string _qualifiedSortedSetTableName;
     private readonly string _expiryIndexName;
 
     private bool _schemaEnsured;
@@ -47,6 +49,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         _qualifiedHashTableName = BuildQualifiedObjectName(identifierParts, "_hash_entries");
         _qualifiedListTableName = BuildQualifiedObjectName(identifierParts, "_list_items");
         _qualifiedSetTableName = BuildQualifiedObjectName(identifierParts, "_set_members");
+        _qualifiedSortedSetTableName = BuildQualifiedObjectName(identifierParts, "_sorted_set_members");
         _expiryIndexName = QuoteIdentifier(BuildIndexName(identifierParts, "expires_at_idx"));
     }
 
@@ -502,6 +505,14 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
                 (
                     key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
                     member bytea NOT NULL,
+                    PRIMARY KEY (key, member)
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedSortedSetTableName}
+                (
+                    key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
+                    member bytea NOT NULL,
+                    score double precision NOT NULL,
                     PRIMARY KEY (key, member)
                 );
                 """);
