@@ -1,4 +1,8 @@
 <Solution>
-  <Project Path="Dredis.Extensions.Storage.Postgres.Tests/Dredis.Extensions.Storage.Postgres.Tests.csproj" />
-  <Project Path="Dredis.Extensions.Storage.Postgres/Dredis.Extensions.Storage.Postgres.csproj" />
+  <Project Path="Dredis.Extensions.Storage.Postgres.Tests/Dredis.Extensions.Storage.Postgres.Tests.csproj">
+    <Build Solution="Debug|*" Project="false" />
+  </Project>
+  <Project Path="Dredis.Extensions.Storage.Postgres/Dredis.Extensions.Storage.Postgres.csproj">
+    <BuildType Project="Release" />
+  </Project>
 </Solution>
