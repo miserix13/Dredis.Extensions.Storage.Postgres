@@ -22,8 +22,8 @@ public sealed class PostgresKeyValueStoreTests
         var dataSource = Npgsql.NpgsqlDataSource.Create("Host=localhost;Username=postgres;Password=postgres;Database=postgres");
         await using var store = new PostgresKeyValueStore(dataSource, "dredis_test_store");
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.StreamLengthAsync("events"));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.HyperLogLogCountAsync(["hll"]));
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesGetAsync("metrics"));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.VectorGetAsync("embedding"));
     }
 
@@ -255,5 +255,130 @@ public sealed class PostgresKeyValueStoreTests
 
         await store.SetAsync("plain-json", "value"u8.ToArray(), expiration: null, SetCondition.None);
         Assert.Equal(JsonResultStatus.WrongType, (await store.JsonGetAsync("plain-json", ["$"])).Status);
+    }
+
+    [Fact]
+    public async Task Stream_operations_work_against_postgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        var tableName = $"dredis_streams_{Guid.NewGuid():N}";
+        await using var store = new PostgresKeyValueStore(connectionString, tableName);
+
+        var firstId = await store.StreamAddAsync(
+            "events",
+            "*",
+            [
+                new KeyValuePair<string, byte[]>("type", "created"u8.ToArray()),
+                new KeyValuePair<string, byte[]>("value", "1"u8.ToArray())
+            ]);
+        var secondId = await store.StreamAddAsync(
+            "events",
+            "*",
+            [
+                new KeyValuePair<string, byte[]>("type", "updated"u8.ToArray())
+            ]);
+
+        Assert.NotNull(firstId);
+        Assert.NotNull(secondId);
+        Assert.Equal(2, await store.StreamLengthAsync("events"));
+        Assert.Equal(secondId, await store.StreamLastIdAsync("events"));
+
+        var read = await store.StreamReadAsync(["events"], ["0-0"], count: null);
+        Assert.Single(read);
+        Assert.Equal(2, read[0].Entries.Length);
+        Assert.Equal(firstId, read[0].Entries[0].Id);
+
+        var range = await store.StreamRangeAsync("events", "-", "+", count: null);
+        Assert.Equal(2, range.Length);
+        Assert.Equal(firstId, range[0].Id);
+
+        var reverseRange = await store.StreamRangeReverseAsync("events", "+", "-", count: 1);
+        Assert.Single(reverseRange);
+        Assert.Equal(secondId, reverseRange[0].Id);
+
+        var info = await store.StreamInfoAsync("events");
+        Assert.Equal(StreamInfoResultStatus.Ok, info.Status);
+        Assert.NotNull(info.Info);
+        Assert.Equal(2, info.Info!.Length);
+        Assert.Equal(firstId, info.Info.FirstEntry!.Id);
+        Assert.Equal(secondId, info.Info.LastEntry!.Id);
+
+        Assert.Equal(1, await store.StreamTrimAsync("events", maxLength: 1));
+        Assert.Equal(1, await store.StreamLengthAsync("events"));
+        Assert.Equal(StreamSetIdResultStatus.InvalidId, await store.StreamSetIdAsync("events", "0-0"));
+        Assert.Equal(StreamSetIdResultStatus.Ok, await store.StreamSetIdAsync("events", "9999999999999-0"));
+        Assert.Equal("9999999999999-0", await store.StreamLastIdAsync("events"));
+        Assert.Equal(1, await store.StreamDeleteAsync("events", [secondId!]));
+        Assert.Equal(0, await store.StreamLengthAsync("events"));
+
+        var orderOne = await store.StreamAddAsync(
+            "orders",
+            "*",
+            [new KeyValuePair<string, byte[]>("id", "1"u8.ToArray())]);
+        var orderTwo = await store.StreamAddAsync(
+            "orders",
+            "*",
+            [new KeyValuePair<string, byte[]>("id", "2"u8.ToArray())]);
+
+        Assert.Equal(StreamGroupCreateResult.Ok, await store.StreamGroupCreateAsync("orders", "workers", "-", mkStream: false));
+
+        var firstRead = await store.StreamGroupReadAsync("workers", "alice", ["orders"], [">"], count: 1, block: null);
+        Assert.Equal(StreamGroupReadResultStatus.Ok, firstRead.Status);
+        Assert.Single(firstRead.Results);
+        Assert.Single(firstRead.Results[0].Entries);
+        Assert.Equal(orderOne, firstRead.Results[0].Entries[0].Id);
+
+        var pendingSummary = await store.StreamPendingAsync("orders", "workers");
+        Assert.Equal(StreamPendingResultStatus.Ok, pendingSummary.Status);
+        Assert.Equal(1, pendingSummary.Count);
+        Assert.Equal(orderOne, pendingSummary.SmallestId);
+        Assert.Single(pendingSummary.Consumers);
+        Assert.Equal("alice", pendingSummary.Consumers[0].Name);
+
+        var ack = await store.StreamAckAsync("orders", "workers", [orderOne!]);
+        Assert.Equal(StreamAckResultStatus.Ok, ack.Status);
+        Assert.Equal(1, ack.Count);
+
+        var secondRead = await store.StreamGroupReadAsync("workers", "alice", ["orders"], [">"], count: 1, block: null);
+        Assert.Equal(StreamGroupReadResultStatus.Ok, secondRead.Status);
+        Assert.Single(secondRead.Results[0].Entries);
+        Assert.Equal(orderTwo, secondRead.Results[0].Entries[0].Id);
+
+        var claimed = await store.StreamClaimAsync("orders", "workers", "bob", 0, [orderTwo!]);
+        Assert.Equal(StreamClaimResultStatus.Ok, claimed.Status);
+        Assert.Single(claimed.Entries);
+        Assert.Equal(orderTwo, claimed.Entries[0].Id);
+
+        var groups = await store.StreamGroupsInfoAsync("orders");
+        Assert.Equal(StreamInfoResultStatus.Ok, groups.Status);
+        Assert.Single(groups.Groups);
+        Assert.Equal("workers", groups.Groups[0].Name);
+        Assert.True(groups.Groups[0].Consumers >= 1);
+        Assert.Equal(1, groups.Groups[0].Pending);
+
+        var consumers = await store.StreamConsumersInfoAsync("orders", "workers");
+        Assert.Equal(StreamInfoResultStatus.Ok, consumers.Status);
+        Assert.Contains(consumers.Consumers, static consumer => consumer.Name == "bob" && consumer.Pending == 1);
+
+        var delConsumer = await store.StreamGroupDelConsumerAsync("orders", "workers", "bob");
+        Assert.Equal(StreamGroupDelConsumerResultStatus.Ok, delConsumer.Status);
+        Assert.Equal(1, delConsumer.Removed);
+
+        var pendingAfterDelete = await store.StreamPendingAsync("orders", "workers");
+        Assert.Equal(StreamPendingResultStatus.Ok, pendingAfterDelete.Status);
+        Assert.Equal(0, pendingAfterDelete.Count);
+
+        Assert.Equal(StreamGroupSetIdResultStatus.Ok, await store.StreamGroupSetIdAsync("orders", "workers", "$"));
+        Assert.Equal(StreamGroupDestroyResult.Removed, await store.StreamGroupDestroyAsync("orders", "workers"));
+
+        await store.SetAsync("plain-stream", "value"u8.ToArray(), expiration: null, SetCondition.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.StreamLengthAsync("plain-stream"));
+        Assert.Equal(StreamInfoResultStatus.WrongType, (await store.StreamInfoAsync("plain-stream")).Status);
+        Assert.Equal(StreamGroupCreateResult.WrongType, await store.StreamGroupCreateAsync("plain-stream", "workers", "-", mkStream: false));
     }
 }

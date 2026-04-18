@@ -15,6 +15,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private const string SetKind = "set";
     private const string SortedSetKind = "sorted-set";
     private const string JsonKind = "json";
+    private const string StreamKind = "stream";
     private static readonly Regex IdentifierPartPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly NpgsqlDataSource _dataSource;
@@ -25,6 +26,11 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private readonly string _qualifiedListTableName;
     private readonly string _qualifiedSetTableName;
     private readonly string _qualifiedSortedSetTableName;
+    private readonly string _qualifiedStreamEntryTableName;
+    private readonly string _qualifiedStreamFieldTableName;
+    private readonly string _qualifiedStreamGroupTableName;
+    private readonly string _qualifiedStreamConsumerTableName;
+    private readonly string _qualifiedStreamPendingTableName;
     private readonly string _expiryIndexName;
 
     private bool _schemaEnsured;
@@ -51,6 +57,11 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         _qualifiedListTableName = BuildQualifiedObjectName(identifierParts, "_list_items");
         _qualifiedSetTableName = BuildQualifiedObjectName(identifierParts, "_set_members");
         _qualifiedSortedSetTableName = BuildQualifiedObjectName(identifierParts, "_sorted_set_members");
+        _qualifiedStreamEntryTableName = BuildQualifiedObjectName(identifierParts, "_stream_entries");
+        _qualifiedStreamFieldTableName = BuildQualifiedObjectName(identifierParts, "_stream_fields");
+        _qualifiedStreamGroupTableName = BuildQualifiedObjectName(identifierParts, "_stream_groups");
+        _qualifiedStreamConsumerTableName = BuildQualifiedObjectName(identifierParts, "_stream_consumers");
+        _qualifiedStreamPendingTableName = BuildQualifiedObjectName(identifierParts, "_stream_pending");
         _expiryIndexName = QuoteIdentifier(BuildIndexName(identifierParts, "expires_at_idx"));
     }
 
@@ -515,6 +526,70 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
                     member bytea NOT NULL,
                     score double precision NOT NULL,
                     PRIMARY KEY (key, member)
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedStreamEntryTableName}
+                (
+                    key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
+                    id_ms bigint NOT NULL,
+                    id_seq bigint NOT NULL,
+                    PRIMARY KEY (key, id_ms, id_seq)
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedStreamFieldTableName}
+                (
+                    key text NOT NULL,
+                    id_ms bigint NOT NULL,
+                    id_seq bigint NOT NULL,
+                    field_index integer NOT NULL,
+                    field text NOT NULL,
+                    value bytea NOT NULL,
+                    PRIMARY KEY (key, id_ms, id_seq, field_index),
+                    FOREIGN KEY (key, id_ms, id_seq)
+                        REFERENCES {_qualifiedStreamEntryTableName}(key, id_ms, id_seq)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedStreamGroupTableName}
+                (
+                    key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
+                    group_name text NOT NULL,
+                    last_delivered_ms bigint NOT NULL,
+                    last_delivered_seq bigint NOT NULL,
+                    PRIMARY KEY (key, group_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedStreamConsumerTableName}
+                (
+                    key text NOT NULL,
+                    group_name text NOT NULL,
+                    consumer_name text NOT NULL,
+                    last_seen_at timestamptz NOT NULL,
+                    PRIMARY KEY (key, group_name, consumer_name),
+                    FOREIGN KEY (key, group_name)
+                        REFERENCES {_qualifiedStreamGroupTableName}(key, group_name)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedStreamPendingTableName}
+                (
+                    key text NOT NULL,
+                    group_name text NOT NULL,
+                    id_ms bigint NOT NULL,
+                    id_seq bigint NOT NULL,
+                    consumer_name text NOT NULL,
+                    last_delivered_at timestamptz NOT NULL,
+                    delivery_count bigint NOT NULL,
+                    PRIMARY KEY (key, group_name, id_ms, id_seq),
+                    FOREIGN KEY (key, group_name)
+                        REFERENCES {_qualifiedStreamGroupTableName}(key, group_name)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (key, group_name, consumer_name)
+                        REFERENCES {_qualifiedStreamConsumerTableName}(key, group_name, consumer_name)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (key, id_ms, id_seq)
+                        REFERENCES {_qualifiedStreamEntryTableName}(key, id_ms, id_seq)
+                        ON DELETE CASCADE
                 );
                 """);
 
