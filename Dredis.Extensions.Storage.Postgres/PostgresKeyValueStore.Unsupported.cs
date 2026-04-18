@@ -48,13 +48,6 @@ public sealed partial class PostgresKeyValueStore
     public Task<ProbabilisticStringArrayResult> TopKListAsync(string key, bool withCount, CancellationToken token = default) => throw CreateNotSupported();
     public Task<ProbabilisticArrayResult> TopKQueryAsync(string key, byte[][] items, CancellationToken token = default) => throw CreateNotSupported();
     public Task<ProbabilisticResultStatus> TopKReserveAsync(string key, int k, int width, int depth, double decay, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<VectorDeleteResult> VectorDeleteAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<VectorGetResult> VectorGetAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<VectorSearchResult> VectorSearchAsync(string keyPrefix, int topK, int offset, string metric, double[] queryVector, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<VectorSetResult> VectorSetAsync(string key, double[] vector, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<VectorSimilarityResult> VectorSimilarityAsync(string key, string otherKey, string metric, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<VectorSizeResult> VectorSizeAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-
     private static NotSupportedException CreateNotSupported([System.Runtime.CompilerServices.CallerMemberName] string? memberName = null) =>
         new($"{memberName} is not implemented in the current PostgreSQL store milestone.");
 }

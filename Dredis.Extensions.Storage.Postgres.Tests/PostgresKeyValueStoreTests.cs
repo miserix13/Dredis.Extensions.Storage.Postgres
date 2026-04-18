@@ -22,9 +22,9 @@ public sealed class PostgresKeyValueStoreTests
         var dataSource = Npgsql.NpgsqlDataSource.Create("Host=localhost;Username=postgres;Password=postgres;Database=postgres");
         await using var store = new PostgresKeyValueStore(dataSource, "dredis_test_store");
 
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.BloomInfoAsync("bloom"));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.HyperLogLogCountAsync(["hll"]));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesGetAsync("metrics"));
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.VectorGetAsync("embedding"));
     }
 
     [Fact]
@@ -380,5 +380,79 @@ public sealed class PostgresKeyValueStoreTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => store.StreamLengthAsync("plain-stream"));
         Assert.Equal(StreamInfoResultStatus.WrongType, (await store.StreamInfoAsync("plain-stream")).Status);
         Assert.Equal(StreamGroupCreateResult.WrongType, await store.StreamGroupCreateAsync("plain-stream", "workers", "-", mkStream: false));
+    }
+
+    [Fact]
+    public async Task Vector_operations_work_against_postgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        var tableName = $"dredis_vectors_{Guid.NewGuid():N}";
+        await using var store = new PostgresKeyValueStore(connectionString, tableName);
+
+        Assert.Equal(VectorResultStatus.NotFound, (await store.VectorGetAsync("embedding:missing")).Status);
+        Assert.Equal(VectorResultStatus.NotFound, (await store.VectorSizeAsync("embedding:missing")).Status);
+
+        Assert.Equal(VectorResultStatus.Ok, (await store.VectorSetAsync("embedding:1", [1d, 0d, 0d])).Status);
+        Assert.Equal(VectorResultStatus.Ok, (await store.VectorSetAsync("embedding:2", [0.5d, 0.5d, 0d])).Status);
+        Assert.Equal(VectorResultStatus.Ok, (await store.VectorSetAsync("embedding:3", [0d, 1d, 0d])).Status);
+
+        var get = await store.VectorGetAsync("embedding:1");
+        Assert.Equal(VectorResultStatus.Ok, get.Status);
+        Assert.NotNull(get.Vector);
+        Assert.Equal([1d, 0d, 0d], get.Vector!);
+
+        var size = await store.VectorSizeAsync("embedding:2");
+        Assert.Equal(VectorResultStatus.Ok, size.Status);
+        Assert.Equal(3, size.Size);
+
+        var cosine = await store.VectorSimilarityAsync("embedding:1", "embedding:2", "COSINE");
+        Assert.Equal(VectorResultStatus.Ok, cosine.Status);
+        Assert.NotNull(cosine.Value);
+        Assert.True(cosine.Value > 0.7d && cosine.Value < 0.71d);
+
+        var dot = await store.VectorSimilarityAsync("embedding:1", "embedding:2", "DOT");
+        Assert.Equal(0.5d, dot.Value);
+
+        var l2 = await store.VectorSimilarityAsync("embedding:1", "embedding:2", "L2");
+        Assert.NotNull(l2.Value);
+        Assert.True(l2.Value > 0.70d && l2.Value < 0.71d);
+
+        var invalidMetric = await store.VectorSimilarityAsync("embedding:1", "embedding:2", "MANHATTAN");
+        Assert.Equal(VectorResultStatus.InvalidArgument, invalidMetric.Status);
+
+        var search = await store.VectorSearchAsync("embedding:", topK: 2, offset: 0, metric: "COSINE", queryVector: [1d, 0d, 0d]);
+        Assert.Equal(VectorResultStatus.Ok, search.Status);
+        Assert.Equal(2, search.Entries.Length);
+        Assert.Equal("embedding:1", search.Entries[0].Key);
+        Assert.Equal("embedding:2", search.Entries[1].Key);
+
+        var pagedL2 = await store.VectorSearchAsync("embedding:", topK: 2, offset: 1, metric: "L2", queryVector: [1d, 0d, 0d]);
+        Assert.Equal(VectorResultStatus.Ok, pagedL2.Status);
+        Assert.Equal(2, pagedL2.Entries.Length);
+        Assert.Equal("embedding:2", pagedL2.Entries[0].Key);
+        Assert.Equal("embedding:3", pagedL2.Entries[1].Key);
+
+        var invalidSearch = await store.VectorSearchAsync("embedding:", topK: 2, offset: 0, metric: "COSINE", queryVector: [1d, 0d]);
+        Assert.Equal(VectorResultStatus.InvalidArgument, invalidSearch.Status);
+
+        await store.SetAsync("plain-vector", "value"u8.ToArray(), expiration: null, SetCondition.None);
+        Assert.Equal(VectorResultStatus.WrongType, (await store.VectorGetAsync("plain-vector")).Status);
+        Assert.Equal(VectorResultStatus.WrongType, (await store.VectorSetAsync("plain-vector", [1d, 2d])).Status);
+
+        var searchWrongType = await store.VectorSearchAsync("plain", topK: 1, offset: 0, metric: "COSINE", queryVector: [1d, 2d]);
+        Assert.Equal(VectorResultStatus.WrongType, searchWrongType.Status);
+
+        var deleted = await store.VectorDeleteAsync("embedding:1");
+        Assert.Equal(VectorResultStatus.Ok, deleted.Status);
+        Assert.Equal(1, deleted.Deleted);
+
+        var missingDelete = await store.VectorDeleteAsync("embedding:missing");
+        Assert.Equal(VectorResultStatus.NotFound, missingDelete.Status);
+        Assert.Equal(0, missingDelete.Deleted);
     }
 }

@@ -17,9 +17,10 @@
 - `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.SortedSets.cs` implements the sorted-set slice, including rank/range operations, score-based range queries, and score updates.
 - `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.Json.cs` implements the JSON slice, including document reads/writes, type/length projections, path deletes, and array mutations.
 - `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.Streams.cs` implements the stream slice, including entry reads/writes, trimming, metadata queries, and consumer-group operations.
+- `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.Vectors.cs` implements the vector slice, including set/get/delete, dimension queries, similarity metrics, and prefix search.
 - `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.Unsupported.cs` holds the still-unimplemented parts of the upstream `Dredis.Abstractions.Storage.IKeyValueStore` contract as explicit `NotSupportedException` stubs. Move methods out of this file only when there is real PostgreSQL behavior and accompanying tests.
-- The store depends directly on `Dredis.Abstractions.Storage` for the upstream contract and `Npgsql` for PostgreSQL access. Storage now uses one parent key table with `kind`, `value`, and `expires_at`, plus child tables for hash fields, list items, set members, sorted-set members, and stream data; JSON stays in the parent-row `value` payload and streams store their last-generated id there.
-- `Dredis.Extensions.Storage.Postgres.Tests\PostgresKeyValueStoreTests.cs` mixes lightweight contract tests with PostgreSQL integration coverage for strings, hashes, lists, sets, sorted sets, JSON, and streams. The integration path uses the `DREDIS_POSTGRES_TEST_CONNECTION_STRING` environment variable.
+- The store depends directly on `Dredis.Abstractions.Storage` for the upstream contract and `Npgsql` for PostgreSQL access. Storage now uses one parent key table with `kind`, `value`, and `expires_at`, plus child tables for hash fields, list items, set members, sorted-set members, and stream data; JSON and vectors stay in the parent-row `value` payload and streams store their last-generated id there.
+- `Dredis.Extensions.Storage.Postgres.Tests\PostgresKeyValueStoreTests.cs` mixes lightweight contract tests with PostgreSQL integration coverage for strings, hashes, lists, sets, sorted sets, JSON, streams, and vectors. The integration path uses the `DREDIS_POSTGRES_TEST_CONNECTION_STRING` environment variable.
 
 ## Key conventions
 
@@ -33,3 +34,4 @@
 - Sorted sets are ordered by `score` and then `member`, matching the current Dredis command handler expectations for deterministic rank and range results. Preserve that secondary ordering if you optimize the SQL later.
 - JSON mutation is currently implemented in-memory against a parsed object model and then persisted back to the parent row. If you optimize it later with native PostgreSQL JSON features, preserve the current path semantics and result statuses first.
 - Streams use `ms-seq` ids, keep last-generated id in the parent row, and hang entries, fields, consumer groups, consumers, and pending records off child tables. Stream add/read/range methods throw on wrong type, while the group/info methods use the upstream status/result objects.
+- Vectors are stored as serialized payloads in the parent row and evaluated in-memory for similarity/search. Preserve the current metric semantics (`COSINE`, `DOT`, `L2`) and deterministic tie-breaking by key if you optimize later.
