@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="Dredis.Extensions.Storage.Postgres.Tests/Dredis.Extensions.Storage.Postgres.Tests.csproj" />
   <Project Path="Dredis.Extensions.Storage.Postgres/Dredis.Extensions.Storage.Postgres.csproj" />
 </Solution>
