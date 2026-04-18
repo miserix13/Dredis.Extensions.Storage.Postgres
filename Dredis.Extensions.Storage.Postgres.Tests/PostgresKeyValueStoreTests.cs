@@ -22,9 +22,9 @@ public sealed class PostgresKeyValueStoreTests
         var dataSource = Npgsql.NpgsqlDataSource.Create("Host=localhost;Username=postgres;Password=postgres;Database=postgres");
         await using var store = new PostgresKeyValueStore(dataSource, "dredis_test_store");
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.BloomInfoAsync("bloom"));
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.HyperLogLogCountAsync(["hll"]));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesGetAsync("metrics"));
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesRangeAsync("metrics", 0, 1, reverse: false, count: null, aggregationType: null, bucketDurationMs: null));
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesInfoAsync("metrics"));
     }
 
     [Fact]
@@ -454,5 +454,96 @@ public sealed class PostgresKeyValueStoreTests
         var missingDelete = await store.VectorDeleteAsync("embedding:missing");
         Assert.Equal(VectorResultStatus.NotFound, missingDelete.Status);
         Assert.Equal(0, missingDelete.Deleted);
+    }
+
+    [Fact]
+    public async Task Probabilistic_operations_work_against_postgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        var tableName = $"dredis_prob_{Guid.NewGuid():N}";
+        await using var store = new PostgresKeyValueStore(connectionString, tableName);
+
+        Assert.Equal(ProbabilisticResultStatus.Ok, await store.BloomReserveAsync("bf", 0.01d, 10));
+        Assert.Equal(ProbabilisticResultStatus.Exists, await store.BloomReserveAsync("bf", 0.01d, 10));
+        Assert.True((await store.BloomAddAsync("bf", "alpha"u8.ToArray())).Value);
+        Assert.False((await store.BloomAddAsync("bf", "alpha"u8.ToArray())).Value);
+        Assert.Equal(new long[] { 0L, 1L }, (await store.BloomMAddAsync("bf", ["alpha"u8.ToArray(), "beta"u8.ToArray()])).Values);
+        Assert.True((await store.BloomExistsAsync("bf", "beta"u8.ToArray())).Value);
+        Assert.Equal(new long[] { 1L, 0L }, (await store.BloomMExistsAsync("bf", ["beta"u8.ToArray(), "missing"u8.ToArray()])).Values);
+        var bloomInfo = await store.BloomInfoAsync("bf");
+        Assert.Equal(ProbabilisticResultStatus.Ok, bloomInfo.Status);
+        Assert.Contains(bloomInfo.Fields, static field => field.Key == "Capacity" && field.Value == "10");
+
+        Assert.Equal(ProbabilisticResultStatus.Ok, await store.CuckooReserveAsync("cf", 8));
+        Assert.True((await store.CuckooAddAsync("cf", "bird"u8.ToArray(), noCreate: false)).Value);
+        Assert.False((await store.CuckooAddNxAsync("cf", "bird"u8.ToArray(), noCreate: false)).Value);
+        Assert.True((await store.CuckooAddAsync("cf", "bird"u8.ToArray(), noCreate: false)).Value);
+        Assert.Equal(2, (await store.CuckooCountAsync("cf", "bird"u8.ToArray())).Count);
+        Assert.True((await store.CuckooExistsAsync("cf", "bird"u8.ToArray())).Value);
+        Assert.True((await store.CuckooDeleteAsync("cf", "bird"u8.ToArray())).Value);
+        Assert.Equal(1, (await store.CuckooCountAsync("cf", "bird"u8.ToArray())).Count);
+        Assert.Equal(ProbabilisticResultStatus.NotFound, (await store.CuckooAddAsync("cf-missing", "bird"u8.ToArray(), noCreate: true)).Status);
+        var cuckooInfo = await store.CuckooInfoAsync("cf");
+        Assert.Equal(ProbabilisticResultStatus.Ok, cuckooInfo.Status);
+        Assert.Contains(cuckooInfo.Fields, static field => field.Key == "Capacity" && field.Value == "8");
+
+        var hllAdd = await store.HyperLogLogAddAsync("hll:a", ["one"u8.ToArray(), "two"u8.ToArray()]);
+        Assert.Equal(HyperLogLogResultStatus.Ok, hllAdd.Status);
+        Assert.True(hllAdd.Changed);
+        Assert.False((await store.HyperLogLogAddAsync("hll:a", ["one"u8.ToArray()])).Changed);
+        await store.HyperLogLogAddAsync("hll:b", ["three"u8.ToArray()]);
+        Assert.Equal(2, (await store.HyperLogLogCountAsync(["hll:a"])).Count);
+        Assert.Equal(3, (await store.HyperLogLogCountAsync(["hll:a", "hll:b"])).Count);
+        Assert.Equal(HyperLogLogResultStatus.Ok, (await store.HyperLogLogMergeAsync("hll:c", ["hll:a", "hll:b"])).Status);
+        Assert.Equal(3, (await store.HyperLogLogCountAsync(["hll:c"])).Count);
+
+        Assert.Equal(ProbabilisticResultStatus.Ok, await store.TDigestCreateAsync("td", 100));
+        Assert.Equal(ProbabilisticResultStatus.Exists, await store.TDigestCreateAsync("td", 50));
+        Assert.Equal(ProbabilisticResultStatus.Ok, await store.TDigestAddAsync("td", [1d, 2d, 3d, 4d]));
+        var quantile = await store.TDigestQuantileAsync("td", [0.5d]);
+        Assert.Equal(ProbabilisticResultStatus.Ok, quantile.Status);
+        Assert.Single(quantile.Values);
+        Assert.Equal(2.5d, quantile.Values[0]);
+        Assert.Equal(new double[] { 0.5d }, (await store.TDigestCdfAsync("td", [2d])).Values);
+        Assert.Equal(new long[] { 2L }, (await store.TDigestRankAsync("td", [3d])).Values);
+        Assert.Equal(new long[] { 1L }, (await store.TDigestRevRankAsync("td", [3d])).Values);
+        Assert.Equal(new double[] { 3d }, (await store.TDigestByRankAsync("td", [2L])).Values);
+        Assert.Equal(new double[] { 4d }, (await store.TDigestByRevRankAsync("td", [0L])).Values);
+        Assert.Equal(2.5d, (await store.TDigestTrimmedMeanAsync("td", 0d, 1d)).Value);
+        Assert.Equal(1d, (await store.TDigestMinAsync("td")).Value);
+        Assert.Equal(4d, (await store.TDigestMaxAsync("td")).Value);
+        Assert.Equal(ProbabilisticResultStatus.Ok, (await store.TDigestInfoAsync("td")).Status);
+        Assert.Equal(ProbabilisticResultStatus.Ok, await store.TDigestResetAsync("td"));
+        Assert.Null((await store.TDigestMinAsync("td")).Value);
+
+        Assert.Equal(ProbabilisticResultStatus.Ok, await store.TopKReserveAsync("topk", 2, 8, 7, 0.9d));
+        var topkAdd = await store.TopKAddAsync("topk", ["apple"u8.ToArray(), "banana"u8.ToArray(), "apple"u8.ToArray()]);
+        Assert.Equal(ProbabilisticResultStatus.Ok, topkAdd.Status);
+        Assert.Equal(new long[] { 1L, 1L, 0L }, (await store.TopKQueryAsync("topk", ["apple"u8.ToArray(), "banana"u8.ToArray(), "pear"u8.ToArray()])).Values);
+        Assert.Equal(new long[] { 2L, 1L }, (await store.TopKCountAsync("topk", ["apple"u8.ToArray(), "banana"u8.ToArray()])).Values);
+        var incr = await store.TopKIncrByAsync(
+            "topk",
+            [
+                new KeyValuePair<byte[], long>("pear"u8.ToArray(), 5)
+            ]);
+        Assert.Equal(ProbabilisticResultStatus.Ok, incr.Status);
+        var list = await store.TopKListAsync("topk", withCount: false);
+        Assert.Equal(ProbabilisticResultStatus.Ok, list.Status);
+        Assert.Equal(new string?[] { "pear", "apple" }, list.Values);
+        var listWithCount = await store.TopKListAsync("topk", withCount: true);
+        Assert.Equal(new string?[] { "pear", "5", "apple", "2" }, listWithCount.Values);
+        Assert.Equal(ProbabilisticResultStatus.Ok, (await store.TopKInfoAsync("topk")).Status);
+
+        await store.SetAsync("plain-prob", "value"u8.ToArray(), expiration: null, SetCondition.None);
+        Assert.Equal(ProbabilisticResultStatus.WrongType, await store.BloomReserveAsync("plain-prob", 0.01d, 10));
+        Assert.Equal(ProbabilisticResultStatus.WrongType, (await store.CuckooExistsAsync("plain-prob", "x"u8.ToArray())).Status);
+        Assert.Equal(HyperLogLogResultStatus.WrongType, (await store.HyperLogLogCountAsync(["plain-prob"])).Status);
+        Assert.Equal(ProbabilisticResultStatus.WrongType, (await store.TDigestInfoAsync("plain-prob")).Status);
+        Assert.Equal(ProbabilisticResultStatus.WrongType, (await store.TopKQueryAsync("plain-prob", ["x"u8.ToArray()])).Status);
     }
 }

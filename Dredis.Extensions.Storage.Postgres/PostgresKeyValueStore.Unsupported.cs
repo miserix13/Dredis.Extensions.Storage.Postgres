@@ -4,35 +4,6 @@ namespace Dredis.Extensions.Storage.Postgres;
 
 public sealed partial class PostgresKeyValueStore
 {
-    public Task<ProbabilisticBoolResult> BloomAddAsync(string key, byte[] element, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticBoolResult> BloomExistsAsync(string key, byte[] element, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticInfoResult> BloomInfoAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticArrayResult> BloomMAddAsync(string key, byte[][] elements, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticArrayResult> BloomMExistsAsync(string key, byte[][] elements, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticResultStatus> BloomReserveAsync(string key, double errorRate, long capacity, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticBoolResult> CuckooAddAsync(string key, byte[] item, bool noCreate, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticBoolResult> CuckooAddNxAsync(string key, byte[] item, bool noCreate, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticCountResult> CuckooCountAsync(string key, byte[] item, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticBoolResult> CuckooDeleteAsync(string key, byte[] item, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticBoolResult> CuckooExistsAsync(string key, byte[] item, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticInfoResult> CuckooInfoAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticResultStatus> CuckooReserveAsync(string key, long capacity, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<HyperLogLogAddResult> HyperLogLogAddAsync(string key, byte[][] elements, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<HyperLogLogCountResult> HyperLogLogCountAsync(string[] keys, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<HyperLogLogMergeResult> HyperLogLogMergeAsync(string destinationKey, string[] sourceKeys, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticResultStatus> TDigestAddAsync(string key, double[] values, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticDoubleArrayResult> TDigestByRankAsync(string key, long[] ranks, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticDoubleArrayResult> TDigestByRevRankAsync(string key, long[] ranks, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticDoubleArrayResult> TDigestCdfAsync(string key, double[] values, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticResultStatus> TDigestCreateAsync(string key, int compression, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticInfoResult> TDigestInfoAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticDoubleResult> TDigestMaxAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticDoubleResult> TDigestMinAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticDoubleArrayResult> TDigestQuantileAsync(string key, double[] quantiles, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticArrayResult> TDigestRankAsync(string key, double[] values, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticResultStatus> TDigestResetAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticArrayResult> TDigestRevRankAsync(string key, double[] values, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticDoubleResult> TDigestTrimmedMeanAsync(string key, double lowerQuantile, double upperQuantile, CancellationToken token = default) => throw CreateNotSupported();
     public Task<TimeSeriesAddResult> TimeSeriesAddAsync(string key, long timestamp, double value, TimeSeriesDuplicatePolicy? onDuplicate, bool createIfMissing, CancellationToken token = default) => throw CreateNotSupported();
     public Task<TimeSeriesResultStatus> TimeSeriesCreateAsync(string key, long? retentionTimeMs, TimeSeriesDuplicatePolicy? duplicatePolicy, KeyValuePair<string, string>[]? labels, CancellationToken token = default) => throw CreateNotSupported();
     public Task<TimeSeriesDeleteResult> TimeSeriesDeleteAsync(string key, long fromTimestamp, long toTimestamp, CancellationToken token = default) => throw CreateNotSupported();
@@ -41,13 +12,6 @@ public sealed partial class PostgresKeyValueStore
     public Task<TimeSeriesInfoResult> TimeSeriesInfoAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
     public Task<TimeSeriesMRangeResult> TimeSeriesMultiRangeAsync(long fromTimestamp, long toTimestamp, bool reverse, int? count, string? aggregationType, long? bucketDurationMs, KeyValuePair<string, string>[] filters, CancellationToken token = default) => throw CreateNotSupported();
     public Task<TimeSeriesRangeResult> TimeSeriesRangeAsync(string key, long fromTimestamp, long toTimestamp, bool reverse, int? count, string? aggregationType, long? bucketDurationMs, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticStringArrayResult> TopKAddAsync(string key, byte[][] items, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticArrayResult> TopKCountAsync(string key, byte[][] items, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticStringArrayResult> TopKIncrByAsync(string key, KeyValuePair<byte[], long>[] increments, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticInfoResult> TopKInfoAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticStringArrayResult> TopKListAsync(string key, bool withCount, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticArrayResult> TopKQueryAsync(string key, byte[][] items, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ProbabilisticResultStatus> TopKReserveAsync(string key, int k, int width, int depth, double decay, CancellationToken token = default) => throw CreateNotSupported();
     private static NotSupportedException CreateNotSupported([System.Runtime.CompilerServices.CallerMemberName] string? memberName = null) =>
         new($"{memberName} is not implemented in the current PostgreSQL store milestone.");
 }

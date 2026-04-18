@@ -17,6 +17,11 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private const string JsonKind = "json";
     private const string StreamKind = "stream";
     private const string VectorKind = "vector";
+    private const string BloomKind = "bloom";
+    private const string CuckooKind = "cuckoo";
+    private const string HyperLogLogKind = "hyperloglog";
+    private const string TDigestKind = "tdigest";
+    private const string TopKKind = "topk";
     private static readonly Regex IdentifierPartPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly NpgsqlDataSource _dataSource;
