@@ -23,7 +23,7 @@ public sealed class PostgresKeyValueStoreTests
         await using var store = new PostgresKeyValueStore(dataSource, "dredis_test_store");
 
         await Assert.ThrowsAsync<NotSupportedException>(() => store.StreamLengthAsync("events"));
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.JsonGetAsync("doc", ["$"]));
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.HyperLogLogCountAsync(["hll"]));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.VectorGetAsync("embedding"));
     }
 
@@ -188,5 +188,72 @@ public sealed class PostgresKeyValueStoreTests
         await store.SetAsync("plain-zset", "value"u8.ToArray(), expiration: null, SetCondition.None);
         Assert.Equal(SortedSetResultStatus.WrongType, (await store.SortedSetCardinalityAsync("plain-zset")).Status);
         Assert.Equal(SortedSetResultStatus.WrongType, (await store.SortedSetScoreAsync("plain-zset", "x"u8.ToArray())).Status);
+    }
+
+    [Fact]
+    public async Task Json_operations_work_against_postgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        var tableName = $"dredis_json_{Guid.NewGuid():N}";
+        await using var store = new PostgresKeyValueStore(connectionString, tableName);
+
+        var setRoot = await store.JsonSetAsync("doc", "$", """{"name":"alice","items":[1,2],"meta":{"active":true}}"""u8.ToArray());
+        Assert.Equal(JsonResultStatus.Ok, setRoot.Status);
+        Assert.True(setRoot.Created);
+
+        var getRoot = await store.JsonGetAsync("doc", ["$"]);
+        Assert.Equal(JsonResultStatus.Ok, getRoot.Status);
+        Assert.Equal("""{"name":"alice","items":[1,2],"meta":{"active":true}}"""u8.ToArray(), getRoot.Value);
+
+        var setNested = await store.JsonSetAsync("doc", "$.name", """"alicia""""u8.ToArray());
+        Assert.Equal(JsonResultStatus.Ok, setNested.Status);
+        Assert.Equal(""""alicia""""u8.ToArray(), (await store.JsonGetAsync("doc", ["$.name"])).Value);
+
+        var type = await store.JsonTypeAsync("doc", ["$.items"]);
+        Assert.Equal(JsonResultStatus.Ok, type.Status);
+        Assert.NotNull(type.Types);
+        Assert.Equal(["array"], type.Types);
+
+        var append = await store.JsonArrappendAsync("doc", "$.items", ["3"u8.ToArray(), "4"u8.ToArray()]);
+        Assert.Equal(JsonResultStatus.Ok, append.Status);
+        Assert.Equal(4, append.Count);
+
+        var arrLen = await store.JsonArrlenAsync("doc", ["$.items"]);
+        Assert.Equal(4, arrLen.Count);
+
+        var arrIndex = await store.JsonArrindexAsync("doc", "$.items", "3"u8.ToArray());
+        Assert.Equal("2"u8.ToArray(), arrIndex.Value);
+
+        var insert = await store.JsonArrinsertAsync("doc", "$.items", 1, ["99"u8.ToArray()]);
+        Assert.Equal(5, insert.Count);
+
+        var trim = await store.JsonArrtrimAsync("doc", "$.items", 1, 3);
+        Assert.Equal(3, trim.Count);
+
+        var rem = await store.JsonArrremAsync("doc", "$.items", null);
+        Assert.Equal(1, rem.Count);
+
+        var strlen = await store.JsonStrlenAsync("doc", ["$.name"]);
+        Assert.Equal(6, strlen.Count);
+
+        var mget = await store.JsonMgetAsync(["doc", "missing"], "$.name");
+        Assert.Equal(JsonResultStatus.Ok, mget.Status);
+        Assert.Equal(""""alicia""""u8.ToArray(), mget.Values![0]);
+        Assert.Equal("null"u8.ToArray(), mget.Values[1]);
+
+        var del = await store.JsonDelAsync("doc", ["$.meta"]);
+        Assert.Equal(JsonResultStatus.Ok, del.Status);
+        Assert.Equal(1, del.Deleted);
+
+        var missingPath = await store.JsonGetAsync("doc", ["$.meta"]);
+        Assert.Equal(JsonResultStatus.PathNotFound, missingPath.Status);
+
+        await store.SetAsync("plain-json", "value"u8.ToArray(), expiration: null, SetCondition.None);
+        Assert.Equal(JsonResultStatus.WrongType, (await store.JsonGetAsync("plain-json", ["$"])).Status);
     }
 }

@@ -20,18 +20,6 @@ public sealed partial class PostgresKeyValueStore
     public Task<HyperLogLogAddResult> HyperLogLogAddAsync(string key, byte[][] elements, CancellationToken token = default) => throw CreateNotSupported();
     public Task<HyperLogLogCountResult> HyperLogLogCountAsync(string[] keys, CancellationToken token = default) => throw CreateNotSupported();
     public Task<HyperLogLogMergeResult> HyperLogLogMergeAsync(string destinationKey, string[] sourceKeys, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonArrayResult> JsonArrappendAsync(string key, string path, byte[][] values, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonGetResult> JsonArrindexAsync(string key, string path, byte[] value, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonArrayResult> JsonArrinsertAsync(string key, string path, int index, byte[][] values, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonArrayResult> JsonArrlenAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonArrayResult> JsonArrremAsync(string key, string path, int? index, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonArrayResult> JsonArrtrimAsync(string key, string path, int start, int stop, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonDelResult> JsonDelAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonGetResult> JsonGetAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonMGetResult> JsonMgetAsync(string[] keys, string path, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonSetResult> JsonSetAsync(string key, string path, byte[] value, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonArrayResult> JsonStrlenAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<JsonTypeResult> JsonTypeAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
     public Task<StreamAckResult> StreamAckAsync(string key, string group, string[] ids, CancellationToken token = default) => throw CreateNotSupported();
     public Task<string?> StreamAddAsync(string key, string id, KeyValuePair<string, byte[]>[] fields, CancellationToken token = default) => throw CreateNotSupported();
     public Task<StreamClaimResult> StreamClaimAsync(string key, string group, string consumer, long minIdleTimeMs, string[] ids, long? idleMs = default, long? timeMs = default, long? retryCount = default, bool force = default, CancellationToken token = default) => throw CreateNotSupported();

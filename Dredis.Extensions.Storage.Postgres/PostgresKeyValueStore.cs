@@ -14,6 +14,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private const string ListKind = "list";
     private const string SetKind = "set";
     private const string SortedSetKind = "sorted-set";
+    private const string JsonKind = "json";
     private static readonly Regex IdentifierPartPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly NpgsqlDataSource _dataSource;
