@@ -22,6 +22,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private const string HyperLogLogKind = "hyperloglog";
     private const string TDigestKind = "tdigest";
     private const string TopKKind = "topk";
+    private const string TimeSeriesKind = "timeseries";
     private static readonly Regex IdentifierPartPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly NpgsqlDataSource _dataSource;
@@ -37,6 +38,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
     private readonly string _qualifiedStreamGroupTableName;
     private readonly string _qualifiedStreamConsumerTableName;
     private readonly string _qualifiedStreamPendingTableName;
+    private readonly string _qualifiedTimeSeriesSampleTableName;
     private readonly string _expiryIndexName;
 
     private bool _schemaEnsured;
@@ -68,6 +70,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         _qualifiedStreamGroupTableName = BuildQualifiedObjectName(identifierParts, "_stream_groups");
         _qualifiedStreamConsumerTableName = BuildQualifiedObjectName(identifierParts, "_stream_consumers");
         _qualifiedStreamPendingTableName = BuildQualifiedObjectName(identifierParts, "_stream_pending");
+        _qualifiedTimeSeriesSampleTableName = BuildQualifiedObjectName(identifierParts, "_timeseries_samples");
         _expiryIndexName = QuoteIdentifier(BuildIndexName(identifierParts, "expires_at_idx"));
     }
 
@@ -596,6 +599,14 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
                     FOREIGN KEY (key, id_ms, id_seq)
                         REFERENCES {_qualifiedStreamEntryTableName}(key, id_ms, id_seq)
                         ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedTimeSeriesSampleTableName}
+                (
+                    key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
+                    timestamp_ms bigint NOT NULL,
+                    value double precision NOT NULL,
+                    PRIMARY KEY (key, timestamp_ms)
                 );
                 """);
 

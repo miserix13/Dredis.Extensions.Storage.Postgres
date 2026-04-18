@@ -17,17 +17,6 @@ public sealed class PostgresKeyValueStoreTests
     }
 
     [Fact]
-    public async Task Unsupported_members_throw_not_supported()
-    {
-        var dataSource = Npgsql.NpgsqlDataSource.Create("Host=localhost;Username=postgres;Password=postgres;Database=postgres");
-        await using var store = new PostgresKeyValueStore(dataSource, "dredis_test_store");
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesGetAsync("metrics"));
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesRangeAsync("metrics", 0, 1, reverse: false, count: null, aggregationType: null, bucketDurationMs: null));
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.TimeSeriesInfoAsync("metrics"));
-    }
-
-    [Fact]
     public async Task Core_string_operations_work_against_postgres()
     {
         var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
@@ -454,6 +443,127 @@ public sealed class PostgresKeyValueStoreTests
         var missingDelete = await store.VectorDeleteAsync("embedding:missing");
         Assert.Equal(VectorResultStatus.NotFound, missingDelete.Status);
         Assert.Equal(0, missingDelete.Deleted);
+    }
+
+    [Fact]
+    public async Task Time_series_operations_work_against_postgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        var tableName = $"dredis_ts_{Guid.NewGuid():N}";
+        await using var store = new PostgresKeyValueStore(connectionString, tableName);
+
+        Assert.Equal(
+            TimeSeriesResultStatus.Ok,
+            await store.TimeSeriesCreateAsync(
+                "ts:metric",
+                retentionTimeMs: 100,
+                duplicatePolicy: TimeSeriesDuplicatePolicy.Last,
+                labels:
+                [
+                    new KeyValuePair<string, string>("region", "us"),
+                    new KeyValuePair<string, string>("type", "temp")
+                ]));
+        Assert.Equal(TimeSeriesResultStatus.Exists, await store.TimeSeriesCreateAsync("ts:metric", retentionTimeMs: null, duplicatePolicy: null, labels: null));
+        Assert.Equal(TimeSeriesResultStatus.Ok, await store.TimeSeriesCreateAsync("ts:empty", retentionTimeMs: null, duplicatePolicy: null, labels: [new KeyValuePair<string, string>("region", "us")]));
+        Assert.Equal(TimeSeriesResultStatus.Ok, await store.TimeSeriesCreateAsync("ts:europe", retentionTimeMs: null, duplicatePolicy: null, labels: [new KeyValuePair<string, string>("region", "eu")]));
+
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesAddAsync("ts:metric", 1000, 1.5d, onDuplicate: null, createIfMissing: false)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesAddAsync("ts:metric", 1010, 2.5d, onDuplicate: null, createIfMissing: false)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesAddAsync("ts:metric", 1010, 3.5d, onDuplicate: null, createIfMissing: false)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesAddAsync("ts:metric", 1010, 9d, TimeSeriesDuplicatePolicy.First, createIfMissing: false)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesAddAsync("ts:metric", 1025, 5d, onDuplicate: null, createIfMissing: false)).Status);
+        Assert.Equal(TimeSeriesResultStatus.InvalidArgument, (await store.TimeSeriesAddAsync("ts:metric", 900, 1d, onDuplicate: null, createIfMissing: false)).Status);
+
+        Assert.Equal(TimeSeriesResultStatus.NotFound, (await store.TimeSeriesAddAsync("ts:missing", 1000, 1d, onDuplicate: null, createIfMissing: false)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesAddAsync("ts:europe", 1100, 7d, onDuplicate: null, createIfMissing: false)).Status);
+
+        var latest = await store.TimeSeriesGetAsync("ts:metric");
+        Assert.Equal(TimeSeriesResultStatus.Ok, latest.Status);
+        Assert.NotNull(latest.Sample);
+        Assert.Equal(1025, latest.Sample!.Timestamp);
+        Assert.Equal(5d, latest.Sample.Value);
+
+        var range = await store.TimeSeriesRangeAsync("ts:metric", 0, 2000, reverse: false, count: null, aggregationType: null, bucketDurationMs: null);
+        Assert.Equal(TimeSeriesResultStatus.Ok, range.Status);
+        Assert.Equal(3, range.Samples.Length);
+        Assert.Equal(1000, range.Samples[0].Timestamp);
+        Assert.Equal(1.5d, range.Samples[0].Value);
+        Assert.Equal(1010, range.Samples[1].Timestamp);
+        Assert.Equal(3.5d, range.Samples[1].Value);
+        Assert.Equal(1025, range.Samples[2].Timestamp);
+        Assert.Equal(5d, range.Samples[2].Value);
+
+        var reverseRange = await store.TimeSeriesRangeAsync("ts:metric", 0, 2000, reverse: true, count: 1, aggregationType: null, bucketDurationMs: null);
+        Assert.Equal(TimeSeriesResultStatus.Ok, reverseRange.Status);
+        Assert.Single(reverseRange.Samples);
+        Assert.Equal(1025, reverseRange.Samples[0].Timestamp);
+
+        var aggregated = await store.TimeSeriesRangeAsync("ts:metric", 0, 2000, reverse: false, count: null, aggregationType: "avg", bucketDurationMs: 20);
+        Assert.Equal(TimeSeriesResultStatus.Ok, aggregated.Status);
+        Assert.Equal(2, aggregated.Samples.Length);
+        Assert.Equal(1000, aggregated.Samples[0].Timestamp);
+        Assert.Equal(2.5d, aggregated.Samples[0].Value);
+        Assert.Equal(1020, aggregated.Samples[1].Timestamp);
+        Assert.Equal(5d, aggregated.Samples[1].Value);
+
+        var mrange = await store.TimeSeriesMultiRangeAsync(0, 3000, reverse: false, count: null, aggregationType: null, bucketDurationMs: null, [new KeyValuePair<string, string>("region", "us")]);
+        Assert.Equal(TimeSeriesResultStatus.Ok, mrange.Status);
+        Assert.Single(mrange.Entries);
+        Assert.Equal("ts:metric", mrange.Entries[0].Key);
+        Assert.Equal(2, mrange.Entries[0].Labels.Length);
+        Assert.Equal(3, mrange.Entries[0].Samples.Length);
+
+        var info = await store.TimeSeriesInfoAsync("ts:metric");
+        Assert.Equal(TimeSeriesResultStatus.Ok, info.Status);
+        Assert.Equal(3, info.TotalSamples);
+        Assert.Equal(1000, info.FirstTimestamp);
+        Assert.Equal(1025, info.LastTimestamp);
+        Assert.Equal(100, info.RetentionTimeMs);
+        Assert.Equal(TimeSeriesDuplicatePolicy.Last, info.DuplicatePolicy);
+        Assert.Equal(2, info.Labels.Length);
+
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesIncrementByAsync("ts:counter", 1d, 2000, createIfMissing: true)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesIncrementByAsync("ts:counter", 2d, 2000, createIfMissing: true)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesIncrementByAsync("ts:counter", 4d, 2005, createIfMissing: true)).Status);
+        var counter = await store.TimeSeriesGetAsync("ts:counter");
+        Assert.Equal(TimeSeriesResultStatus.Ok, counter.Status);
+        Assert.NotNull(counter.Sample);
+        Assert.Equal(2005, counter.Sample!.Timestamp);
+        Assert.Equal(7d, counter.Sample.Value);
+        Assert.Equal(TimeSeriesResultStatus.InvalidArgument, (await store.TimeSeriesIncrementByAsync("ts:counter", 1d, 1999, createIfMissing: true)).Status);
+        Assert.Equal(TimeSeriesResultStatus.NotFound, (await store.TimeSeriesIncrementByAsync("ts:counter-missing", 1d, 1000, createIfMissing: false)).Status);
+
+        var deleted = await store.TimeSeriesDeleteAsync("ts:metric", 1000, 1010);
+        Assert.Equal(TimeSeriesResultStatus.Ok, deleted.Status);
+        Assert.Equal(2, deleted.Deleted);
+
+        var remaining = await store.TimeSeriesRangeAsync("ts:metric", 0, 2000, reverse: false, count: null, aggregationType: null, bucketDurationMs: null);
+        Assert.Equal(TimeSeriesResultStatus.Ok, remaining.Status);
+        Assert.Single(remaining.Samples);
+        Assert.Equal(1025, remaining.Samples[0].Timestamp);
+
+        var infoAfterDelete = await store.TimeSeriesInfoAsync("ts:metric");
+        Assert.Equal(TimeSeriesResultStatus.Ok, infoAfterDelete.Status);
+        Assert.Equal(1, infoAfterDelete.TotalSamples);
+        Assert.Equal(1025, infoAfterDelete.FirstTimestamp);
+        Assert.Equal(1025, infoAfterDelete.LastTimestamp);
+
+        Assert.Equal(TimeSeriesResultStatus.NotFound, (await store.TimeSeriesRangeAsync("ts:missing", 0, 1, reverse: false, count: null, aggregationType: null, bucketDurationMs: null)).Status);
+        Assert.Equal(TimeSeriesResultStatus.NotFound, (await store.TimeSeriesDeleteAsync("ts:missing", 0, 1)).Status);
+
+        await store.SetAsync("plain-ts", "value"u8.ToArray(), expiration: null, SetCondition.None);
+        Assert.Equal(TimeSeriesResultStatus.WrongType, await store.TimeSeriesCreateAsync("plain-ts", retentionTimeMs: null, duplicatePolicy: null, labels: null));
+        Assert.Equal(TimeSeriesResultStatus.WrongType, (await store.TimeSeriesGetAsync("plain-ts")).Status);
+        Assert.Equal(TimeSeriesResultStatus.WrongType, (await store.TimeSeriesRangeAsync("plain-ts", 0, 1, reverse: false, count: null, aggregationType: null, bucketDurationMs: null)).Status);
+
+        Assert.Equal(TimeSeriesResultStatus.Ok, await store.TimeSeriesCreateAsync("ts:block", retentionTimeMs: null, duplicatePolicy: null, labels: null));
+        Assert.Equal(TimeSeriesResultStatus.Ok, (await store.TimeSeriesAddAsync("ts:block", 10, 1d, onDuplicate: null, createIfMissing: false)).Status);
+        Assert.Equal(TimeSeriesResultStatus.Exists, (await store.TimeSeriesAddAsync("ts:block", 10, 2d, onDuplicate: null, createIfMissing: false)).Status);
     }
 
     [Fact]
