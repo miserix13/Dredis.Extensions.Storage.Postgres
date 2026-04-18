@@ -12,10 +12,11 @@
 
 - The repository contains one solution (`Dredis.Extensions.Storage.Postgres.slnx`) with a library project and an xUnit test project.
 - Per the README, this library is intended to provide a PostgreSQL-backed key-value store implementation for the broader Dredis ecosystem.
-- `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.cs` contains the PostgreSQL-backed core implementation for the first milestone: string/bulk operations, TTL handling, integer increment, schema initialization, and cleanup of expired rows.
-- `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.Unsupported.cs` implements the remainder of the upstream `Dredis.Abstractions.Storage.IKeyValueStore` contract as explicit `NotSupportedException` stubs. Extend this file by replacing stubs with real PostgreSQL-backed behavior as new data types are implemented.
-- The store depends directly on `Dredis.Abstractions.Storage` for the upstream contract and `Npgsql` for PostgreSQL access. Storage is currently a single table with `key`, `value`, and `expires_at` columns.
-- `Dredis.Extensions.Storage.Postgres.Tests\PostgresKeyValueStoreTests.cs` mixes lightweight contract tests with one PostgreSQL integration test. The integration path uses the `DREDIS_POSTGRES_TEST_CONNECTION_STRING` environment variable.
+- `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.cs` owns the shared PostgreSQL schema, string/bulk operations, TTL handling, integer increment, and parent-key lifecycle.
+- `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.HashListSet.cs` implements the current collection slice: hashes, lists, and sets.
+- `Dredis.Extensions.Storage.Postgres\PostgresKeyValueStore.Unsupported.cs` holds the still-unimplemented parts of the upstream `Dredis.Abstractions.Storage.IKeyValueStore` contract as explicit `NotSupportedException` stubs. Move methods out of this file only when there is real PostgreSQL behavior and accompanying tests.
+- The store depends directly on `Dredis.Abstractions.Storage` for the upstream contract and `Npgsql` for PostgreSQL access. Storage now uses one parent key table with `kind`, `value`, and `expires_at`, plus child tables for hash fields, list items, and set members.
+- `Dredis.Extensions.Storage.Postgres.Tests\PostgresKeyValueStoreTests.cs` mixes lightweight contract tests with PostgreSQL integration coverage for strings, hashes, lists, and sets. The integration path uses the `DREDIS_POSTGRES_TEST_CONNECTION_STRING` environment variable.
 
 ## Key conventions
 
@@ -24,4 +25,5 @@
 - Naming currently follows the package path directly: solution name, project name, namespace, and primary type all use `Dredis.Extensions.Storage.Postgres`.
 - `PostgresKeyValueStore` accepts either a connection string or an `NpgsqlDataSource`. If you add constructor overloads or lifetime behavior, preserve the distinction between owned and externally supplied data sources.
 - Custom table names are allowed, but only as unquoted PostgreSQL identifiers made of letters, digits, and underscores, optionally schema-qualified. That validation is intentional because the table name is injected into DDL/DML as an identifier, not a parameter.
-- New supported `IKeyValueStore` members should move from `PostgresKeyValueStore.Unsupported.cs` into the main implementation file only when they have real PostgreSQL behavior and tests.
+- TTL lives on the parent key row, not the child tables. When adding new data types, preserve that pattern so `DeleteAsync`, `ExpireAsync`, `TtlAsync`, and expired-key cleanup continue to work uniformly across key kinds.
+- Hash methods use exceptions for wrong-type access because the upstream hash signatures do not carry a status enum; list and set methods should continue using their result-status types for wrong-type cases.

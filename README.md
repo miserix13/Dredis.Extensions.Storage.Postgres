@@ -4,7 +4,7 @@
 
 ## Current implementation scope
 
-The first milestone implements the core `Dredis.Abstractions.Storage.IKeyValueStore` string surface against PostgreSQL:
+The current PostgreSQL-backed milestone covers the core `Dredis.Abstractions.Storage.IKeyValueStore` string surface plus hashes, lists, and sets:
 
 - `GetAsync`
 - `SetAsync`
@@ -18,8 +18,25 @@ The first milestone implements the core `Dredis.Abstractions.Storage.IKeyValueSt
 - `TtlAsync`
 - `PttlAsync`
 - `CleanUpExpiredKeysAsync`
+- `HashSetAsync`
+- `HashGetAsync`
+- `HashDeleteAsync`
+- `HashGetAllAsync`
+- `ListPushAsync`
+- `ListPopAsync`
+- `ListRangeAsync`
+- `ListLengthAsync`
+- `ListIndexAsync`
+- `ListSetAsync`
+- `ListTrimAsync`
+- `SetAddAsync`
+- `SetRemoveAsync`
+- `SetMembersAsync`
+- `SetCardinalityAsync`
 
 Other `IKeyValueStore` members are present but currently throw `NotSupportedException` so the package can already integrate with Dredis while the PostgreSQL-backed feature set expands in later milestones.
+
+Internally, the store now uses a shared key metadata table with `kind`, `value`, and `expires_at` columns, plus per-type child tables for hash fields, list items, and set members. TTL is tracked on the parent key row and child rows are deleted through foreign-key cascades.
 
 ## Build and test
 
@@ -29,4 +46,4 @@ dotnet build .\Dredis.Extensions.Storage.Postgres.slnx -c Release
 dotnet test .\Dredis.Extensions.Storage.Postgres.slnx -c Release
 ```
 
-The test project includes one PostgreSQL integration test for the core string operations. Set `DREDIS_POSTGRES_TEST_CONNECTION_STRING` to run it against a real PostgreSQL instance; otherwise that test returns early and the rest of the suite still runs.
+The test project includes PostgreSQL integration coverage for the string, hash, list, and set slices. Set `DREDIS_POSTGRES_TEST_CONNECTION_STRING` to run those tests against a real PostgreSQL instance; otherwise the integration tests return early and the rest of the suite still runs.

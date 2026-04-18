@@ -22,9 +22,9 @@ public sealed class PostgresKeyValueStoreTests
         var dataSource = Npgsql.NpgsqlDataSource.Create("Host=localhost;Username=postgres;Password=postgres;Database=postgres");
         await using var store = new PostgresKeyValueStore(dataSource, "dredis_test_store");
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.HashGetAsync("users", "alice"));
-        await Assert.ThrowsAsync<NotSupportedException>(() => store.ListLengthAsync("items"));
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.SortedSetCardinalityAsync("scores"));
         await Assert.ThrowsAsync<NotSupportedException>(() => store.JsonGetAsync("doc", ["$"]));
+        await Assert.ThrowsAsync<NotSupportedException>(() => store.VectorGetAsync("embedding"));
     }
 
     [Fact]
@@ -72,5 +72,63 @@ public sealed class PostgresKeyValueStoreTests
         Assert.Equal(2, await store.DeleteAsync(["alpha", "gamma"]));
         Assert.False(await store.ExistsAsync("alpha"));
         Assert.True(await store.CleanUpExpiredKeysAsync() >= 0);
+    }
+
+    [Fact]
+    public async Task Hash_list_and_set_operations_work_against_postgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        var tableName = $"dredis_structures_{Guid.NewGuid():N}";
+        await using var store = new PostgresKeyValueStore(connectionString, tableName);
+
+        Assert.True(await store.HashSetAsync("user:1", "name", "alice"u8.ToArray()));
+        Assert.False(await store.HashSetAsync("user:1", "name", "alicia"u8.ToArray()));
+        Assert.True(await store.HashSetAsync("user:1", "role", "admin"u8.ToArray()));
+        Assert.Equal("alicia"u8.ToArray(), await store.HashGetAsync("user:1", "name"));
+        Assert.Equal(2, (await store.HashGetAllAsync("user:1")).Length);
+        Assert.Equal(1, await store.HashDeleteAsync("user:1", ["role"]));
+        Assert.Null(await store.HashGetAsync("user:1", "role"));
+
+        var leftPush = await store.ListPushAsync("jobs", ["a"u8.ToArray(), "b"u8.ToArray()], left: true);
+        Assert.Equal(ListResultStatus.Ok, leftPush.Status);
+        Assert.Equal(2, leftPush.Length);
+
+        var rightPush = await store.ListPushAsync("jobs", ["c"u8.ToArray()], left: false);
+        Assert.Equal(3, rightPush.Length);
+
+        var range = await store.ListRangeAsync("jobs", 0, -1);
+        Assert.Equal(ListResultStatus.Ok, range.Status);
+        Assert.Equal(["b"u8.ToArray(), "a"u8.ToArray(), "c"u8.ToArray()], range.Values);
+
+        var index = await store.ListIndexAsync("jobs", -1);
+        Assert.Equal(ListResultStatus.Ok, index.Status);
+        Assert.Equal("c"u8.ToArray(), index.Value);
+
+        Assert.Equal(ListSetResultStatus.Ok, (await store.ListSetAsync("jobs", 1, "updated"u8.ToArray())).Status);
+        Assert.Equal("updated"u8.ToArray(), (await store.ListIndexAsync("jobs", 1)).Value);
+
+        Assert.Equal(ListResultStatus.Ok, await store.ListTrimAsync("jobs", 1, 2));
+        Assert.Equal(2, (await store.ListLengthAsync("jobs")).Length);
+        Assert.Equal("c"u8.ToArray(), (await store.ListPopAsync("jobs", left: false)).Value);
+
+        var addMembers = await store.SetAddAsync("tags", ["red"u8.ToArray(), "blue"u8.ToArray(), "red"u8.ToArray()]);
+        Assert.Equal(SetResultStatus.Ok, addMembers.Status);
+        Assert.Equal(2, addMembers.Count);
+
+        var members = await store.SetMembersAsync("tags");
+        Assert.Equal(SetResultStatus.Ok, members.Status);
+        Assert.Equal(2, members.Members.Length);
+        Assert.Equal(2, (await store.SetCardinalityAsync("tags")).Count);
+        Assert.Equal(1, (await store.SetRemoveAsync("tags", ["blue"u8.ToArray()])).Count);
+
+        await store.SetAsync("plain", "value"u8.ToArray(), expiration: null, SetCondition.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.HashGetAsync("plain", "field"));
+        Assert.Equal(ListResultStatus.WrongType, (await store.ListLengthAsync("plain")).Status);
+        Assert.Equal(SetResultStatus.WrongType, (await store.SetCardinalityAsync("plain")).Status);
     }
 }

@@ -9,13 +9,19 @@ namespace Dredis.Extensions.Storage.Postgres;
 public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable, IAsyncDisposable
 {
     private const string DefaultTableName = "dredis_key_values";
-    private const string DefaultExpiryIndexName = "dredis_key_values_expires_at_idx";
+    private const string StringKind = "string";
+    private const string HashKind = "hash";
+    private const string ListKind = "list";
+    private const string SetKind = "set";
     private static readonly Regex IdentifierPartPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly NpgsqlDataSource _dataSource;
     private readonly bool _ownsDataSource;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
     private readonly string _qualifiedTableName;
+    private readonly string _qualifiedHashTableName;
+    private readonly string _qualifiedListTableName;
+    private readonly string _qualifiedSetTableName;
     private readonly string _expiryIndexName;
 
     private bool _schemaEnsured;
@@ -38,7 +44,10 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
 
         var identifierParts = ParseIdentifierParts(tableName);
         _qualifiedTableName = string.Join(".", identifierParts.Select(QuoteIdentifier));
-        _expiryIndexName = QuoteIdentifier(BuildIndexName(identifierParts));
+        _qualifiedHashTableName = BuildQualifiedObjectName(identifierParts, "_hash_entries");
+        _qualifiedListTableName = BuildQualifiedObjectName(identifierParts, "_list_items");
+        _qualifiedSetTableName = BuildQualifiedObjectName(identifierParts, "_set_members");
+        _expiryIndexName = QuoteIdentifier(BuildIndexName(identifierParts, "expires_at_idx"));
     }
 
     public async Task<long> CleanUpExpiredKeysAsync(CancellationToken token = default)
@@ -66,11 +75,13 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
             SELECT value
             FROM {_qualifiedTableName}
             WHERE key = @key
+              AND kind = @kind
               AND (expires_at IS NULL OR expires_at > NOW())
             LIMIT 1;
             """);
 
         command.Parameters.AddWithValue("key", key);
+        command.Parameters.AddWithValue("kind", StringKind);
 
         var result = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
         return result is DBNull or null ? null : (byte[])result;
@@ -94,7 +105,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         await using var connection = await OpenConnectionAsync(token).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
 
-        var existing = await TryGetLiveEntryAsync(connection, transaction, key, token).ConfigureAwait(false);
+        var existing = await TryGetLiveEntryAsync(connection, key, transaction, token).ConfigureAwait(false);
 
         if (condition == SetCondition.Nx && existing.Exists)
         {
@@ -108,22 +119,19 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
             return false;
         }
 
-        await using var command = CreateCommand(
+        if (existing.Exists && existing.Kind != StringKind)
+        {
+            await DeleteByKeyAsync(connection, key, transaction, token).ConfigureAwait(false);
+        }
+
+        await UpsertKeyMetadataAsync(
             connection,
-            $"""
-            INSERT INTO {_qualifiedTableName} (key, value, expires_at)
-            VALUES (@key, @value, @expiresAt)
-            ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value,
-                expires_at = EXCLUDED.expires_at;
-            """,
-            transaction);
-
-        command.Parameters.AddWithValue("key", key);
-        command.Parameters.AddWithValue("value", value);
-        command.Parameters.AddWithValue("expiresAt", expiration is null ? DBNull.Value : DateTimeOffset.UtcNow.Add(expiration.Value));
-
-        await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            key,
+            StringKind,
+            value,
+            expiration is null ? null : DateTimeOffset.UtcNow.Add(expiration.Value),
+            transaction,
+            token).ConfigureAwait(false);
         await transaction.CommitAsync(token).ConfigureAwait(false);
         return true;
     }
@@ -145,11 +153,13 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
             FROM unnest(@keys) WITH ORDINALITY AS input(key, ordinality)
             LEFT JOIN {_qualifiedTableName} AS store
               ON store.key = input.key
+             AND store.kind = @kind
              AND (store.expires_at IS NULL OR store.expires_at > NOW())
             ORDER BY input.ordinality;
             """);
 
         command.Parameters.AddWithValue("keys", keys);
+        command.Parameters.AddWithValue("kind", StringKind);
 
         var results = new byte[]?[keys.Length];
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -180,25 +190,23 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
 
         await using var connection = await OpenConnectionAsync(token).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
-        await using var command = CreateCommand(
-            connection,
-            $"""
-            INSERT INTO {_qualifiedTableName} (key, value, expires_at)
-            VALUES (@key, @value, NULL)
-            ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value,
-                expires_at = NULL;
-            """,
-            transaction);
-
-        var keyParameter = command.Parameters.Add("key", NpgsqlTypes.NpgsqlDbType.Text);
-        var valueParameter = command.Parameters.Add("value", NpgsqlTypes.NpgsqlDbType.Bytea);
 
         foreach (var item in items)
         {
-            keyParameter.Value = item.Key;
-            valueParameter.Value = item.Value;
-            await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            var existing = await TryGetLiveEntryAsync(connection, item.Key, transaction, token).ConfigureAwait(false);
+            if (existing.Exists && existing.Kind != StringKind)
+            {
+                await DeleteByKeyAsync(connection, item.Key, transaction, token).ConfigureAwait(false);
+            }
+
+            await UpsertKeyMetadataAsync(
+                connection,
+                item.Key,
+                StringKind,
+                item.Value,
+                expiresAt: null,
+                transaction,
+                token).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(token).ConfigureAwait(false);
@@ -277,13 +285,18 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         await using var connection = await OpenConnectionAsync(token).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
 
-        var existing = await TryGetLiveEntryAsync(connection, transaction, key, token).ConfigureAwait(false);
+        var existing = await TryGetLiveEntryAsync(connection, key, transaction, token).ConfigureAwait(false);
         long nextValue;
         DateTimeOffset? expiresAt = existing.ExpiresAt;
 
         if (!existing.Exists)
         {
             nextValue = delta;
+        }
+        else if (existing.Kind != StringKind)
+        {
+            await transaction.RollbackAsync(token).ConfigureAwait(false);
+            return null;
         }
         else if (!TryParseInt64(existing.Value!, out var currentValue))
         {
@@ -303,22 +316,14 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
             }
         }
 
-        await using var command = CreateCommand(
+        await UpsertKeyMetadataAsync(
             connection,
-            $"""
-            INSERT INTO {_qualifiedTableName} (key, value, expires_at)
-            VALUES (@key, @value, @expiresAt)
-            ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value,
-                expires_at = EXCLUDED.expires_at;
-            """,
-            transaction);
-
-        command.Parameters.AddWithValue("key", key);
-        command.Parameters.AddWithValue("value", Encoding.UTF8.GetBytes(nextValue.ToString(CultureInfo.InvariantCulture)));
-        command.Parameters.AddWithValue("expiresAt", expiresAt is null ? DBNull.Value : expiresAt.Value);
-
-        await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            key,
+            StringKind,
+            Encoding.UTF8.GetBytes(nextValue.ToString(CultureInfo.InvariantCulture)),
+            expiresAt,
+            transaction,
+            token).ConfigureAwait(false);
         await transaction.CommitAsync(token).ConfigureAwait(false);
         return nextValue;
     }
@@ -452,13 +457,53 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
                 CREATE TABLE IF NOT EXISTS {_qualifiedTableName}
                 (
                     key text PRIMARY KEY,
-                    value bytea NOT NULL,
+                    kind text NOT NULL DEFAULT '{StringKind}',
+                    value bytea NULL,
                     expires_at timestamptz NULL
                 );
+
+                ALTER TABLE {_qualifiedTableName}
+                    ADD COLUMN IF NOT EXISTS kind text;
+
+                ALTER TABLE {_qualifiedTableName}
+                    ALTER COLUMN kind SET DEFAULT '{StringKind}';
+
+                UPDATE {_qualifiedTableName}
+                SET kind = '{StringKind}'
+                WHERE kind IS NULL;
+
+                ALTER TABLE {_qualifiedTableName}
+                    ALTER COLUMN kind SET NOT NULL;
+
+                ALTER TABLE {_qualifiedTableName}
+                    ALTER COLUMN value DROP NOT NULL;
 
                 CREATE INDEX IF NOT EXISTS {_expiryIndexName}
                     ON {_qualifiedTableName} (expires_at)
                     WHERE expires_at IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedHashTableName}
+                (
+                    key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
+                    field text NOT NULL,
+                    value bytea NOT NULL,
+                    PRIMARY KEY (key, field)
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedListTableName}
+                (
+                    key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
+                    position bigint NOT NULL,
+                    value bytea NOT NULL,
+                    PRIMARY KEY (key, position)
+                );
+
+                CREATE TABLE IF NOT EXISTS {_qualifiedSetTableName}
+                (
+                    key text NOT NULL REFERENCES {_qualifiedTableName}(key) ON DELETE CASCADE,
+                    member bytea NOT NULL,
+                    PRIMARY KEY (key, member)
+                );
                 """);
 
             await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
@@ -507,7 +552,14 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
 
     private static string QuoteIdentifier(string identifierPart) => $"\"{identifierPart}\"";
 
-    private static string BuildIndexName(IEnumerable<string> identifierParts)
+    private static string BuildQualifiedObjectName(IReadOnlyList<string> identifierParts, string suffix)
+    {
+        var childParts = identifierParts.ToArray();
+        childParts[^1] = childParts[^1] + suffix;
+        return string.Join(".", childParts.Select(QuoteIdentifier));
+    }
+
+    private static string BuildIndexName(IEnumerable<string> identifierParts, string suffix)
     {
         var prefix = string.Join("_", identifierParts).ToLowerInvariant();
         if (prefix.Length > 40)
@@ -515,7 +567,7 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
             prefix = prefix[..40];
         }
 
-        return $"{prefix}_expires_at_idx";
+        return $"{prefix}_{suffix}";
     }
 
     private static void ValidateKey(string key)
@@ -550,16 +602,16 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         return command;
     }
 
-    private async Task<(bool Exists, byte[]? Value, DateTimeOffset? ExpiresAt)> TryGetLiveEntryAsync(
+    private async Task<(bool Exists, string? Kind, byte[]? Value, DateTimeOffset? ExpiresAt)> TryGetLiveEntryAsync(
         NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
         string key,
+        NpgsqlTransaction? transaction,
         CancellationToken token)
     {
         await using var command = CreateCommand(
             connection,
             $"""
-            SELECT value, expires_at
+            SELECT kind, value, expires_at
             FROM {_qualifiedTableName}
             WHERE key = @key
             FOR UPDATE;
@@ -571,26 +623,55 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            return (false, null, null);
+            return (false, null, null, null);
         }
 
-        var value = reader.GetFieldValue<byte[]>(0);
-        var expiresAt = reader.IsDBNull(1) ? (DateTimeOffset?)null : reader.GetFieldValue<DateTimeOffset>(1);
+        var kind = reader.GetString(0);
+        var value = reader.IsDBNull(1) ? null : reader.GetFieldValue<byte[]>(1);
+        var expiresAt = reader.IsDBNull(2) ? (DateTimeOffset?)null : reader.GetFieldValue<DateTimeOffset>(2);
         await reader.DisposeAsync().ConfigureAwait(false);
 
         if (expiresAt is { } actualExpiry && actualExpiry <= DateTimeOffset.UtcNow)
         {
-            await DeleteByKeyAsync(connection, transaction, key, token).ConfigureAwait(false);
-            return (false, null, null);
+            await DeleteByKeyAsync(connection, key, transaction, token).ConfigureAwait(false);
+            return (false, null, null, null);
         }
 
-        return (true, value, expiresAt);
+        return (true, kind, value, expiresAt);
+    }
+
+    private async Task UpsertKeyMetadataAsync(
+        NpgsqlConnection connection,
+        string key,
+        string kind,
+        byte[]? value,
+        DateTimeOffset? expiresAt,
+        NpgsqlTransaction? transaction,
+        CancellationToken token)
+    {
+        await using var command = CreateCommand(
+            connection,
+            $"""
+            INSERT INTO {_qualifiedTableName} (key, kind, value, expires_at)
+            VALUES (@key, @kind, @value, @expiresAt)
+            ON CONFLICT (key) DO UPDATE
+            SET kind = EXCLUDED.kind,
+                value = EXCLUDED.value,
+                expires_at = EXCLUDED.expires_at;
+            """,
+            transaction);
+
+        command.Parameters.AddWithValue("key", key);
+        command.Parameters.AddWithValue("kind", kind);
+        command.Parameters.AddWithValue("value", value is null ? DBNull.Value : value);
+        command.Parameters.AddWithValue("expiresAt", expiresAt is null ? DBNull.Value : expiresAt.Value);
+        await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
 
     private async Task DeleteByKeyAsync(
         NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
         string key,
+        NpgsqlTransaction? transaction,
         CancellationToken token)
     {
         await using var command = CreateCommand(
@@ -604,6 +685,9 @@ public sealed partial class PostgresKeyValueStore : IKeyValueStore, IDisposable,
         command.Parameters.AddWithValue("key", key);
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
+
+    private static InvalidOperationException CreateWrongTypeException() =>
+        new("WRONGTYPE Operation against a key holding the wrong kind of value");
 
     private async Task<bool> ExistsRegardlessOfExpiryAsync(NpgsqlConnection connection, string key, CancellationToken token)
     {

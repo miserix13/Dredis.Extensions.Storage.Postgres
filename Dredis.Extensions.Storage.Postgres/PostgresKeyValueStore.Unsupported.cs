@@ -17,10 +17,6 @@ public sealed partial class PostgresKeyValueStore
     public Task<ProbabilisticBoolResult> CuckooExistsAsync(string key, byte[] item, CancellationToken token = default) => throw CreateNotSupported();
     public Task<ProbabilisticInfoResult> CuckooInfoAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
     public Task<ProbabilisticResultStatus> CuckooReserveAsync(string key, long capacity, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<long> HashDeleteAsync(string key, string[] fields, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<KeyValuePair<string, byte[]>[]> HashGetAllAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<byte[]?> HashGetAsync(string key, string field, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<bool> HashSetAsync(string key, string field, byte[] value, CancellationToken token = default) => throw CreateNotSupported();
     public Task<HyperLogLogAddResult> HyperLogLogAddAsync(string key, byte[][] elements, CancellationToken token = default) => throw CreateNotSupported();
     public Task<HyperLogLogCountResult> HyperLogLogCountAsync(string[] keys, CancellationToken token = default) => throw CreateNotSupported();
     public Task<HyperLogLogMergeResult> HyperLogLogMergeAsync(string destinationKey, string[] sourceKeys, CancellationToken token = default) => throw CreateNotSupported();
@@ -36,17 +32,6 @@ public sealed partial class PostgresKeyValueStore
     public Task<JsonSetResult> JsonSetAsync(string key, string path, byte[] value, CancellationToken token = default) => throw CreateNotSupported();
     public Task<JsonArrayResult> JsonStrlenAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
     public Task<JsonTypeResult> JsonTypeAsync(string key, string[] paths, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ListIndexResult> ListIndexAsync(string key, int index, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ListLengthResult> ListLengthAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ListPopResult> ListPopAsync(string key, bool left, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ListPushResult> ListPushAsync(string key, byte[][] values, bool left, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ListRangeResult> ListRangeAsync(string key, int start, int stop, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ListSetResult> ListSetAsync(string key, int index, byte[] value, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<ListResultStatus> ListTrimAsync(string key, int start, int stop, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SetCountResult> SetAddAsync(string key, byte[][] members, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SetCountResult> SetCardinalityAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SetMembersResult> SetMembersAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
-    public Task<SetCountResult> SetRemoveAsync(string key, byte[][] members, CancellationToken token = default) => throw CreateNotSupported();
     public Task<SortedSetCountResult> SortedSetAddAsync(string key, SortedSetEntry[] entries, CancellationToken token = default) => throw CreateNotSupported();
     public Task<SortedSetCountResult> SortedSetCardinalityAsync(string key, CancellationToken token = default) => throw CreateNotSupported();
     public Task<SortedSetCountResult> SortedSetCountByScoreAsync(string key, double minScore, double maxScore, CancellationToken token = default) => throw CreateNotSupported();
